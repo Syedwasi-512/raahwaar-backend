@@ -1,0 +1,217 @@
+const asyncHandler = require("express-async-handler");
+const Cart = require("../models/Cart");
+const Product = require("../models/Product_Models/Product");
+const ProductImage = require("../models/Product_Models/ProductImage");
+const db = require("../models/Product_Models/index");
+
+// --- HELPER: Fast & Clean Cart Builder ---
+const buildCleanCart = async (cart) => {
+  if (!cart || !cart.items.length) {
+    return { cart: { _id: cart?._id, items: [] }, total: 0 };
+  }
+
+  // 1. Get all product IDs in the cart
+  const productIds = cart.items.map(
+    (item) => item.productId._id || item.productId
+  );
+
+  // 2. Fetch all images for these products in ONE query
+  const images = await ProductImage.find({
+    productId: { $in: productIds },
+  }).lean();
+
+  const items = cart.items
+    .map((item) => {
+      const product = item.productId; // This is the populated product object
+      if (!product) return null;
+
+      // Calculate dynamic price
+      const finalPrice =
+        product.discountPercent > 0
+          ? product.price - (product.price * product.discountPercent) / 100
+          : product.price;
+
+      // Find the specific image from our pre-fetched list
+      const productImg = images.find(
+        (img) => img.productId.toString() === product._id.toString()
+      );
+
+      return {
+        _id: item._id,
+        quantity: item.quantity,
+        productId: product._id,
+        finalPrice: finalPrice,
+        product: {
+          title: product.title,
+          price: product.price,
+          discountPercent: product.discountPercent,
+          image: productImg?.url || null,
+          brand: product.brandId?.name,
+          size: product.sizeId?.value,
+          color: product.colorId?.name,
+          condition: product.conditionId?.name,
+          stock: product.quantity,
+        },
+      };
+    })
+    .filter(Boolean); // Remove nulls if any product was deleted from DB
+
+  const total = items.reduce(
+    (sum, item) => sum + item.finalPrice * item.quantity,
+    0
+  );
+
+  return { cart: { _id: cart._id, items }, total };
+};
+
+// --- CONTROLLERS ---
+
+// @desc    Get User Cart
+// @route   GET /api/cart
+exports.getCart = asyncHandler(async (req, res) => {
+  if (!req.cart) return res.json({ cart: { items: [] }, total: 0 });
+
+  const cart = await Cart.findById(req.cart._id).populate({
+    path: "items.productId",
+    populate: {
+      path: "brandId sizeId colorId conditionId",
+      select: "name value",
+    },
+  });
+
+  const response = await buildCleanCart(cart);
+  res.status(200).json(response);
+});
+
+// @desc    Add Item to Cart
+// @route   POST /api/cart/add
+exports.addToCart = asyncHandler(async (req, res) => {
+  const { productId, quantity = 1 } = req.body;
+  let cart = req.cart;
+
+  // 1. If no cart exists, create one
+  if (!cart) {
+    cart = await Cart.create({ items: [] });
+    res.cookie("cartId", cart._id.toString(), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production", // Security for live site
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+  }
+
+  // 2. Stock Check
+  const product = await Product.findById(productId).lean();
+  if (!product) {
+    res.status(404);
+    throw new Error("Product not found");
+  }
+
+  if (product.quantity < quantity) {
+    res.status(400);
+    throw new Error(`Only ${product.quantity} items left in stock`);
+  }
+
+  const currentPrice =
+    product.discountPercent > 0
+      ? product.price - (product.price * product.discountPercent) / 100
+      : product.price;
+
+  // 3. Update Cart logic (Atomic check)
+  const existingItemIndex = cart.items.findIndex(
+    (item) => item.productId.toString() === productId
+  );
+
+  if (existingItemIndex > -1) {
+    const newQty = cart.items[existingItemIndex].quantity + quantity;
+    if (newQty > product.quantity) {
+      cart.items[existingItemIndex].quantity = product.quantity; // Cap at max stock
+    } else {
+      cart.items[existingItemIndex].quantity = newQty;
+    }
+
+    // Price update (Taake agar admin ne price badli ho toh cart update ho jaye)
+    cart.items[existingItemIndex].price = currentPrice;
+  } else {
+    cart.items.push({ productId, quantity: Number(quantity) , price: currentPrice });
+  }
+
+  await cart.save();
+
+  // 4. Return Populated Cart
+  const populatedCart = await Cart.findById(cart._id).populate({
+    path: "items.productId",
+    populate: {
+      path: "brandId sizeId colorId conditionId",
+      select: "name value",
+    },
+  });
+
+  res.status(200).json(await buildCleanCart(populatedCart));
+});
+
+// @desc    Update Item Quantity
+// @route   PUT /api/cart/update
+exports.updateItem = asyncHandler(async (req, res) => {
+  const { productId, quantity } = req.body;
+  const cart = await Cart.findById(req.cart._id);
+  if (!cart) {
+    res.status(404);
+    throw new Error("Cart session expired");
+  }
+
+  if (quantity <= 0) {
+    // Industry standard: If qty is 0, remove item
+    cart.items = cart.items.filter(
+      (item) => item.productId.toString() !== productId
+    );
+  } else {
+    const product = await Product.findById(productId).lean();
+    if (product.quantity < quantity) {
+      res.status(400);
+      throw new Error(`Stock limit reached: ${product.quantity} available`);
+    }
+
+    const item = cart.items.find((it) => it.productId.toString() === productId);
+    if (item) item.quantity = quantity;
+  }
+
+  await cart.save();
+
+  const populatedCart = await Cart.findById(cart._id).populate({
+    path: "items.productId",
+    populate: {
+      path: "brandId sizeId colorId conditionId",
+      select: "name value",
+    },
+  });
+  res.json(await buildCleanCart(populatedCart));
+});
+
+// @desc    Remove Specific Item
+// @route   POST /api/cart/remove
+exports.removeItem = asyncHandler(async (req, res) => {
+  const { productId } = req.body;
+
+  // Use MongoDB $pull for high-speed removal
+  const updatedCart = await Cart.findByIdAndUpdate(
+    req.cart._id,
+    { $pull: { items: { productId: productId } } },
+    { new: true }
+  ).populate({
+    path: "items.productId",
+    populate: {
+      path: "brandId sizeId colorId conditionId",
+      select: "name value",
+    },
+  });
+
+  res.json(await buildCleanCart(updatedCart));
+});
+
+// @desc    Clear All Cart
+// @route   POST /api/cart/clear
+exports.clearCart = asyncHandler(async (req, res) => {
+  await Cart.findByIdAndUpdate(req.cart._id, { $set: { items: [] } });
+  res.json({ success: true, cart: { items: [] }, total: 0 });
+});
