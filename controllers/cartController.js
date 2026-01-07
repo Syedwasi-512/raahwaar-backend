@@ -188,16 +188,26 @@ exports.updateItem = asyncHandler(async (req, res) => {
   res.json(await buildCleanCart(populatedCart));
 });
 
-// @desc    Remove Specific Item
+// @desc    Remove Specific Item from Cart
 // @route   POST /api/cart/remove
 exports.removeItem = asyncHandler(async (req, res) => {
   const { productId } = req.body;
 
-  // Use MongoDB $pull for high-speed removal
+  // 1. DEFENSIVE CHECK: Agar req.cart null hai toh crash na karo
+  if (!req.cart || !req.cart._id) {
+    return res.status(200).json({ 
+      success: true, 
+      cart: { items: [] }, 
+      total: 0,
+      message: "Cart session not found" 
+    });
+  }
+
+  // 2. ATOMIC REMOVAL: Use MongoDB $pull for high-speed removal
   const updatedCart = await Cart.findByIdAndUpdate(
     req.cart._id,
     { $pull: { items: { productId: productId } } },
-    { new: true }
+    { new: true } // Taake humein update hone ke baad wala cart mile
   ).populate({
     path: "items.productId",
     populate: {
@@ -206,6 +216,12 @@ exports.removeItem = asyncHandler(async (req, res) => {
     },
   });
 
+  // 3. CLEANUP: Agar update ke baad cart galti se null ho jaye
+  if (!updatedCart) {
+    return res.status(200).json({ cart: { items: [] }, total: 0 });
+  }
+
+  // 4. RESPONSE: Build clean structure for frontend
   res.json(await buildCleanCart(updatedCart));
 });
 
