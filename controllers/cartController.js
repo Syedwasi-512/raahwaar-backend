@@ -3,6 +3,7 @@ const Cart = require("../models/Cart");
 const Product = require("../models/Product_Models/Product");
 const ProductImage = require("../models/Product_Models/ProductImage");
 const db = require("../models/Product_Models/index");
+const COOKIE_OPTIONS = require("../config/cookieConfig");
 
 // --- HELPER: Fast & Clean Cart Builder ---
 const buildCleanCart = async (cart) => {
@@ -93,10 +94,8 @@ exports.addToCart = asyncHandler(async (req, res) => {
   if (!cart) {
     cart = await Cart.create({ items: [] });
     res.cookie("cartId", cart._id.toString(), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // Security for live site
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+        ...COOKIE_OPTIONS,
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 Days
     });
   }
 

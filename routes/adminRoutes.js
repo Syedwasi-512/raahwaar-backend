@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const Blacklist = require("../models/Blacklist");
 const adminAuth = require("../middlewares/adminAuth");
 const asyncHandler = require("express-async-handler");
+const COOKIE_OPTIONS = require("../config/cookieConfig");
 
 /*  router.post('/signup' , async(req , res)=>{
 try {
@@ -41,9 +42,7 @@ router.post("/login", async (req, res) => {
     });
 
     res.cookie("adminToken", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // Sirf HTTPS par chalega
-      sameSite: "none", // CSRF protection
+      ...COOKIE_OPTIONS,
       maxAge: 24 * 60 * 60 * 1000, // 1 din ki expiry
     });
 
@@ -82,12 +81,7 @@ router.put("/change-password", adminAuth, async (req, res) => {
     admin.password = newPassword;
     await admin.save();
 
-    res.clearCookie("adminToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      path: "/",
-    });
+   res.clearCookie("adminToken", COOKIE_OPTIONS);
 
     res.json({ message: "Password changed successfully" });
   } catch (error) {
@@ -105,12 +99,7 @@ router.get(
       // 2. Token ko blacklist mein dalain taake yeh dobara use na ho sakay
       await Blacklist.create({ token });
     }
-    res.clearCookie("adminToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      path: "/", // Yeh lazmi hai, warna cookie remove nahi hogi
-    });
+    res.clearCookie("adminToken", COOKIE_OPTIONS);
 
     res
       .status(200)

@@ -2,37 +2,39 @@ const Cart = require("../models/Cart");
 const mongoose = require("mongoose");
 const asyncHandler = require("express-async-handler");
 
+const COOKIE_OPTIONS = require("../config/cookieConfig");
+
 /**
- * @desc    Attaches existing cart to request or cleans up dead cookies
- * @logic   Does not create a cart until an item is actually added (Performance focus)
+ * @desc    Professional Cart Middleware
+ * @logic   Validates cartId and cleans up invalid/dead cookies to prevent server crashes.
  */
 const getOrCreateCart = asyncHandler(async (req, res, next) => {
     const cartId = req.cookies?.cartId;
 
-    // 1. Agar cookie hi nahi hai, toh seedha agle middleware par jao
+    // 1. If no cookie, reset state and move on
     if (!cartId) {
         req.cart = null;
         return next();
     }
 
-    // 2. Security Check: Validate ID format before DB call
+    // 2. SECURITY CHECK: Validate ObjectId format
     if (!mongoose.isValidObjectId(cartId)) {
-        // Professional Touch: Agar ID invalid hai, toh browser se cookie uda do
-        res.clearCookie("cartId");
+        // Professional Cleanup: Delete invalid formatted cookie
+        res.clearCookie("cartId", COOKIE_OPTIONS);
         req.cart = null;
         return next();
     }
 
-    // 3. Find Cart (Lean use nahi karenge kyunke controllers isay save() karenge)
+    // 3. DATABASE CHECK
     const cart = await Cart.findById(cartId);
 
     if (!cart) {
-        // Logic: Agar Cookie mein ID thi par DB mein cart nahi mila (Expired or Deleted)
-        // Toh browser ko bolo ke ye cookie ab purani ho chuki hai
-        res.clearCookie("cartId");
+        // Logic: ID was valid but cart was deleted or expired in DB
+        // We MUST clear this from user's browser to stop 404/500 errors on next requests
+        res.clearCookie("cartId", COOKIE_OPTIONS);
         req.cart = null;
     } else {
-        // Attach the real Mongoose document
+        // Everything is fine, attach the Mongoose object
         req.cart = cart;
     }
 
