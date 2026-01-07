@@ -78,7 +78,7 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/products', require("./routes/productRoutes"));
 app.use("/api/orders", require('./routes/orderRoutes'));
 app.use("/api/cart", require('./routes/cartRoutes'));
-app.use("/api/filters", require("./routes/filter.Routes"));
+app.use("/api/filters", require("./routes/filter.routes"));
 app.use("/api/ai", require("./routes/aiRoutes"));
 
 // --- 4. ERROR HANDLING ---
