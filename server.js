@@ -17,6 +17,9 @@ connectDB();
 
 const app = express();
 
+// Vercel/Render ke liye zaroori hai
+app.set('trust proxy', 1); 
+
 // --- 1. SECURITY & OPTIMIZATION ---
 
 // Helmet: Secure headers (crossOriginResourcePolicy: false zaroori hai images ke liye)

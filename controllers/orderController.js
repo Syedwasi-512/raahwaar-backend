@@ -246,10 +246,12 @@ exports.createOrder = asyncHandler(async (req, res) => {
 // @route   GET /api/orders/confirm/:id/:token
 // @desc    Confirm order & Deduct Stock
 // @route   GET /api/orders/confirm/:id/:token
+// @desc    Confirm order & Deduct Stock
+// @route   GET /api/orders/confirm/:id/:token
 exports.confirmOrder = asyncHandler(async (req, res) => {
   const { id, token } = req.params;
 
-  // 1. Fetch Order (No .lean() here because we need to save later)
+  // 1. Fetch Order (Strict Check)
   const order = await Order.findOne({ _id: id, confirmationToken: token });
 
   // 2. Validate Order & Token
@@ -259,16 +261,20 @@ exports.confirmOrder = asyncHandler(async (req, res) => {
   }
 
   if (order.isConfirmed) {
-    res.status(400);
-    throw new Error("This order has already been confirmed");
+    // Professional Redirect agar pehle hi confirm ho chuka ho
+    return res.send(`
+      <div style="font-family:sans-serif; text-align:center; padding:50px;">
+        <h1 style="color:#2a9d8f;">Order Already Verified!</h1>
+        <p>Your order is already being processed. Check your inbox for details.</p>
+      </div>
+    `);
   }
 
-  // 3. ATOMIC Stock Deduction (Industry Standard)
-  // .map() tabhi chalega agar products array mojood ho
+  // 3. ATOMIC Stock Deduction
   const items = order.products || [];
   if (items.length === 0) {
     res.status(400);
-    throw new Error("Order manifest is empty. Confirmation failed.");
+    throw new Error("Order manifest is empty.");
   }
 
   const bulkOps = items.map((item) => ({
@@ -280,34 +286,45 @@ exports.confirmOrder = asyncHandler(async (req, res) => {
 
   const result = await Product.bulkWrite(bulkOps);
 
-  // 4. Verify if all items were in stock
+  // 4. Verify Stock
   if (result.modifiedCount !== items.length) {
     res.status(400);
-    throw new Error("Stock shortage: One or more items are now unavailable");
+    throw new Error("Stock shortage: One or more items just went out of stock.");
   }
 
-  // 5. Update Order Status
+  // 5. Update Order Status in Database
   order.isConfirmed = true;
   order.confirmationToken = undefined;
   order.status = "Confirmed";
   await order.save();
 
-  // 6. Send Success Email (Async)
+  // 6. --- SENIOR FIX: SEND SUCCESS EMAIL (Strictly Await) ---
   const successHtml = getEmailTemplate("ORDER_SUCCESS", {
     name: order.name,
     orderId: order._id,
-    items: [],
+    items: [], // Detail add karna chahen toh items pass karein
     totalAmount: order.totalAmount,
   });
-  sendEmail(order.email, "✅ Order Confirmed - Raahwaar", successHtml);
 
-  // 7. Success UI Response
+  try {
+    // Vercel par isay await karna LAZMI hai warna socket close ho jayega
+    await sendEmail(order.email, "✅ Order Confirmed - Raahwaar", successHtml);
+    console.log(`📧 Success email dispatched to ${order.email}`);
+  } catch (emailErr) {
+    // Agar email fail bhi ho jaye toh database update ho chuka hai, hum crash nahi karenge
+    console.error("🔥 Nodemailer Error in Confirmation:", emailErr.message);
+  }
+
+  // 7. Success UI Response (Sent ONLY after email process is done)
   res.send(`
     <div style="font-family:sans-serif; text-align:center; padding:50px; background:#f9f9f9; min-height:100vh;">
-      <div style="background:white; max-width:500px; margin:auto; padding:40px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
-        <h1 style="color:#28a745; margin-bottom:10px;">✔ Confirmed!</h1>
-        <p style="color:#666;">Thank you <b>${order.name}</b>, your order is verified and is being processed.</p>
-        <p style="font-size:12px; color:#999; margin-top:20px;">You can close this window now.</p>
+      <div style="background:white; max-width:500px; margin:auto; padding:40px; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+        <h1 style="color:#28a745; margin-bottom:10px; font-size: 32px;">✔ Verified!</h1>
+        <p style="color:#333; font-size: 16px; line-height: 1.6;">Thank you <b>${order.name}</b>, your order is verified and sent to our warehouse for packing.</p>
+        <p style="font-size:12px; color:#999; margin-top:25px;">Order ID: #${order._id.toString().slice(-6).toUpperCase()}</p>
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+           <a href="${process.env.FRONTEND_URL}" style="text-decoration:none; color:#000; font-weight:bold; font-size:14px;">Return to Store</a>
+        </div>
       </div>
     </div>
   `);
