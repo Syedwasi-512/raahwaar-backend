@@ -154,28 +154,57 @@ exports.addToCart = asyncHandler(async (req, res) => {
 // @route   PUT /api/cart/update
 exports.updateItem = asyncHandler(async (req, res) => {
   const { productId, quantity } = req.body;
+
+  // 1. SECURITY & CRASH PREVENTION: Check if req.cart exists
+  if (!req.cart || !req.cart._id) {
+    res.status(404);
+    throw new Error("Your cart session has expired. Please refresh the page.");
+  }
+
+  // 2. FETCH CART: Direct fetch from ID
   const cart = await Cart.findById(req.cart._id);
   if (!cart) {
     res.status(404);
-    throw new Error("Cart session expired");
+    throw new Error("Cart not found in database.");
   }
 
-  if (quantity <= 0) {
-    // Industry standard: If qty is 0, remove item
-    cart.items = cart.items.filter(
-      (item) => item.productId.toString() !== productId
-    );
+  // 3. PRODUCT VALIDATION: Check if product exists and check stock
+  const product = await Product.findById(productId).lean();
+  if (!product) {
+    res.status(404);
+    throw new Error("Product no longer exists.");
+  }
+
+  // 4. QUANTITY LOGIC
+  const targetQuantity = Number(quantity);
+
+  if (targetQuantity <= 0) {
+    // If quantity is 0 or less, remove the item
+    cart.items = cart.items.filter(item => item.productId.toString() !== productId);
   } else {
-    const product = await Product.findById(productId).lean();
-    if (product.quantity < quantity) {
+    // Stock Check
+    if (product.quantity < targetQuantity) {
       res.status(400);
-      throw new Error(`Stock limit reached: ${product.quantity} available`);
+      throw new Error(`Only ${product.quantity} pairs remaining in stock.`);
     }
 
-    const item = cart.items.find((it) => it.productId.toString() === productId);
-    if (item) item.quantity = quantity;
+    // Find item and update quantity & price (Price sync zaroori hai)
+    const itemIndex = cart.items.findIndex(it => it.productId.toString() === productId);
+    
+    if (itemIndex > -1) {
+      const discount = product.discountPercent || 0;
+      const basePrice = product.price || 0;
+      const finalPrice = discount > 0 ? Math.round(basePrice - (basePrice * discount / 100)) : basePrice;
+
+      cart.items[itemIndex].quantity = targetQuantity;
+      cart.items[itemIndex].price = finalPrice; // Ensure price is always correct
+    } else {
+      res.status(404);
+      throw new Error("Item not found in your cart.");
+    }
   }
 
+  // 5. SAVE & POPULATE
   await cart.save();
 
   const populatedCart = await Cart.findById(cart._id).populate({
@@ -185,7 +214,10 @@ exports.updateItem = asyncHandler(async (req, res) => {
       select: "name value",
     },
   });
-  res.json(await buildCleanCart(populatedCart));
+
+  // 6. RESPONSE: Build clean structure using the helper we made
+  const response = await buildCleanCart(populatedCart);
+  res.status(200).json(response);
 });
 
 // @desc    Remove Specific Item from Cart
