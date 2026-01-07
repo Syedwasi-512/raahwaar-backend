@@ -1,54 +1,57 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require("cors");
-const helmet = require("helmet"); // Security headers
-const rateLimit = require("express-rate-limit"); // Rate limiting
-const compression = require("compression"); // Response compression for speed
-const morgan = require("morgan"); // Request logging
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const compression = require("compression");
+const morgan = require("morgan");
 const cookieParser = require('cookie-parser');
 const connectDB = require("./config/db");
 const { errorHandler } = require("./middlewares/errorMiddleware");
 
-// Load Env
+// Load Environment Variables
 dotenv.config();
 
-// Connect Database
+// Initialize Database
 connectDB();
 
 const app = express();
 
-// --- 1. SECURITY MIDDLEWARES (Industrial Standard) ---
+// --- 1. SECURITY & OPTIMIZATION ---
 
-// Helmet: HTTP headers ko secure karta hai
-app.use(helmet());
+// Helmet: Secure headers (crossOriginResourcePolicy: false zaroori hai images ke liye)
+app.use(helmet({ crossOriginResourcePolicy: false }));
 
-// CORS: Sirf apne frontend ko access dena
+// CORS: Flexible origin for Vite and Vercel
+const allowedOrigins = [process.env.FRONTEND_URL, 'http://localhost:5173'].filter(Boolean);
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 }));
 
-// Rate Limiter: Ek IP se 15 min mein sirf 100 requests (DDoS protection)
+// Rate Limiting: DDOS Protection
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
-    message: "Too many requests from this IP, please try again later."
+    message: "Too many requests, please try again later."
 });
 app.use("/api", limiter);
 
-// Body Parser: Limit set karna taake koi bohot bari JSON file bhej kar server crash na kare
+// Body Parsers & Sanitization
 app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(cookieParser());
 
-// --- CUSTOM NOSQL INJECTION PROTECTION ---
+// --- CUSTOM NOSQL INJECTION PROTECTION (Safe for Node 20+) ---
 app.use((req, res, next) => {
     const sanitize = (obj) => {
         if (obj instanceof Object) {
             for (let key in obj) {
                 if (key.startsWith('$')) {
-                    delete obj[key]; // Hacker ke $ commands ko delete kar do
+                    delete obj[key];
                 } else {
-                    sanitize(obj[key]); // Deep cleaning
+                    sanitize(obj[key]);
                 }
             }
         }
@@ -59,51 +62,51 @@ app.use((req, res, next) => {
     next();
 });
 
-// Compression: API response ko compress karta hai taake website fast load ho
 app.use(compression());
 
-// Logging: Development mode mein requests console par dikhayega
-//route response time ko bhi show karega on live site pa
 if (process.env.NODE_ENV === "development") {
     app.use(morgan("dev"));
 }
-
-app.use(cookieParser());
 
 // --- 2. CRON JOBS ---
 require("./cron/cancelExpiredOrders");
 
 // --- 3. ROUTES ---
+
+// Welcome Route (Taake Vercel link par 404 na aaye)
+app.get("/", (req, res) => {
+    res.status(200).json({ success: true, message: "Raahwaar API is running smoothly." });
+});
+
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/products', require("./routes/productRoutes"));
 app.use("/api/orders", require('./routes/orderRoutes'));
 app.use("/api/cart", require('./routes/cartRoutes'));
-app.use("/api/filters", require("./routes/filter.routes"));
+app.use("/api/filters", require("./routes/filter.routes")); // Ensure file is 'filter.routes.js'
 app.use("/api/ai", require("./routes/aiRoutes"));
 
 // --- 4. ERROR HANDLING ---
 
-// 404 Route handler
+// 404 Handler
 app.use((req, res, next) => {
     res.status(404).json({ 
         success: false, 
-        message: `Can't find ${req.originalUrl} on this server!` 
+        message: `Route ${req.originalUrl} not found on this server.` 
     });
 });
 
-// Global Error Middleware (App crash hone se bachayega)
+// Global Error Middleware
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-    console.log(`🚀 Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-});
+// --- 5. SERVER EXECUTION ---
 
-// --- 5. GRACEFUL SHUTDOWN ---
-// Agar database mein error aaye to server ko safely band karna
-process.on("unhandledRejection", (err) => {
-    console.log(`Error: ${err.message}`);
-    server.close(() => process.exit(1));
-});
+// Vercel par 'app.listen' nahi chalta, sirf local development mein chalta hai
+if (process.env.NODE_ENV !== 'production') {
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => {
+        console.log(`🚀 Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+    });
+}
 
+// --- CRITICAL FOR VERCEL ---
 module.exports = app;
