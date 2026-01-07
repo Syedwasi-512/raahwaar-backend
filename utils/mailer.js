@@ -15,7 +15,7 @@ const transporter = nodemailer.createTransport({
 
 
     await transporter.sendMail({
-        from: `"VilayatBazaar" <${process.env.EMAIL_USER}>`,
+        from: `"Raahwaar-pk" <${process.env.EMAIL_USER}>`,
         to,
         subject ,
         html

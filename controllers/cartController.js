@@ -211,7 +211,28 @@ exports.removeItem = asyncHandler(async (req, res) => {
 
 // @desc    Clear All Cart
 // @route   POST /api/cart/clear
+// @desc    Clear All items from Cart
+// @route   POST /api/cart/clear
 exports.clearCart = asyncHandler(async (req, res) => {
-  await Cart.findByIdAndUpdate(req.cart._id, { $set: { items: [] } });
-  res.json({ success: true, cart: { items: [] }, total: 0 });
+  // 1. Defensive Check: Agar cart pehle hi nahi hai toh crash na karo
+  if (!req.cart || !req.cart._id) {
+    return res.status(200).json({ 
+      success: true, 
+      cart: { items: [] }, 
+      total: 0,
+      message: "Cart was already empty" 
+    });
+  }
+
+  // 2. Database Update: Direct ID use karein
+  await Cart.findByIdAndUpdate(req.cart._id, { 
+    $set: { items: [] } 
+  });
+
+  // 3. Clean Response
+  res.status(200).json({ 
+    success: true, 
+    cart: { items: [] }, 
+    total: 0 
+  });
 });
